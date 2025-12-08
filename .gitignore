@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+vendor/
+.env
+.env.local
+.env.*.local
+
+# Build directories
+# dist/
+# build/
+# public/build/
+# public/hot/
+
+# Storage
+storage/*.key
+storage/framework/cache/
+storage/framework/sessions/
+storage/framework/views/
+
+
+# Logs
+*.log
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Composer
+/vendor/
+composer.lock
+
+# NPM/Yarn
+package-lock.json
+yarn.lock
