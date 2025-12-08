@@ -22,6 +22,8 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'last_seen_at',
+        'is_online',
     ];
 
     /**
@@ -47,6 +49,34 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
+            'last_seen_at' => 'datetime',
+            'is_online' => 'boolean',
         ];
     }
+
+    public function getIsOnlineNowAttribute()
+    {
+        if (!$this->last_seen_at) {
+            return false;
+        }
+
+        // Consider online if last activity was within 3 minutes
+        return $this->last_seen_at->greaterThan(now()->subMinutes(3));
+    }
+
+    // Update last seen timestamp
+    public function updateLastSeen()
+    {
+        $this->last_seen_at = now();
+        $this->is_online = true;
+        $this->save();
+    }
+
+    // Mark as offline
+    public function markAsOffline()
+    {
+        $this->is_online = false;
+        $this->save();
+    }
+
 }

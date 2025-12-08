@@ -2,10 +2,13 @@
 import AppLayout from '@/layouts/AppLayout.vue';
 import { dashboard } from '@/routes';
 import { Head, router, usePage } from '@inertiajs/vue3';
-import { computed } from 'vue';
-
+import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { useNotifications } from '@/composables/useNotifications';
+import axios from 'axios';
 
 const page = usePage();
+const { getNotificationCount, markAsRead, setupGlobalListener } = useNotifications();
+const onlineStatuses = ref({});
 
 const props = defineProps({
     users: {
@@ -22,15 +25,18 @@ const breadcrumbs = [
 ];
 
 // Check if current user is admin
-const isAdmin = page.props.auth.user.role === 'admin'; // Adjust based on your role field
+const isAdmin = page.props.auth.user.role === 'admin';
+
+// Initialize online statuses from props
+props.users.forEach(user => {
+    onlineStatuses.value[user.id] = user.is_online_now;
+});
 
 // Filter users based on role
 const filteredUsers = computed(() => {
     if (isAdmin) {
-        // Admin sees all users except themselves
         return props.users.filter(user => user.id !== page.props.auth.user.id);
     } else {
-        // Regular users only see admin users
         return props.users.filter(user => user.role === 'admin' && user.id !== page.props.auth.user.id);
     }
 });
@@ -39,18 +45,139 @@ const getInitials = (name) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
 }
 
-const getRandomColor = (id) => {
-    const colors = [
-        'bg-blue-500', 'bg-green-500', 'bg-purple-500',
-        'bg-pink-500', 'bg-indigo-500', 'bg-teal-500',
-        'bg-orange-500', 'bg-cyan-500', 'bg-amber-500'
-    ];
-    return colors[id % colors.length];
+const startChat = (userId) => {
+    markAsRead(userId);
+    router.get(`/chat/${userId}`);
 }
 
-const startChat = (userId) => {
-    router.get(`chat/${userId}`);
-}
+// JavaScript ping system
+let pingInterval = null;
+let onlineCheckInterval = null;
+
+const sendPing = () => {
+    axios.post('/user/ping').catch(() => {
+        console.log('Ping failed');
+    });
+};
+
+// Periodically check online status of other users
+const checkOnlineStatus = () => {
+    filteredUsers.value.forEach(user => {
+        if (user.last_seen_at) {
+            const lastSeen = new Date(user.last_seen_at);
+            const now = new Date();
+            const diffMs = now - lastSeen;
+            // Consider online if last seen within 3 minutes
+            onlineStatuses.value[user.id] = diffMs < 3 * 60 * 1000;
+        }
+    });
+};
+
+// Setup Echo listener for real-time online status updates
+const setupOnlineStatusListener = () => {
+    if (window.Echo) {
+        try {
+            const channel = window.Echo.join('online-users');
+
+            channel.here((users) => {
+                users.forEach(user => {
+                    if (user.id !== page.props.auth.user.id) {
+                        onlineStatuses.value[user.id] = true;
+                    }
+                });
+            })
+                .joining((user) => {
+                    if (user.id !== page.props.auth.user.id) {
+                        onlineStatuses.value[user.id] = true;
+                    }
+                })
+                .leaving((user) => {
+                    if (user.id !== page.props.auth.user.id) {
+                        onlineStatuses.value[user.id] = false;
+                    }
+                })
+                .listen('.UserOnlineStatusUpdated', (e) => {
+                    if (e.user && e.user.id !== page.props.auth.user.id) {
+                        onlineStatuses.value[e.user.id] = e.is_online;
+                    }
+                });
+
+            return () => {
+                window.Echo.leave('online-users');
+            };
+        } catch (error) {
+            console.error('Echo error:', error);
+        }
+    }
+    return () => { };
+};
+
+onMounted(() => {
+    // Send initial ping
+    sendPing();
+
+    // Setup ping every 30 seconds
+    pingInterval = setInterval(sendPing, 30000);
+
+    // Check online status every 10 seconds
+    onlineCheckInterval = setInterval(checkOnlineStatus, 10000);
+
+    // Setup online status listener
+    const cleanupOnlineListener = setupOnlineStatusListener();
+
+    // Setup notification listener
+    const cleanupNotificationListener = setupGlobalListener();
+
+    // Handle page visibility
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Cleanup on unmount
+    onUnmounted(() => {
+        if (pingInterval) clearInterval(pingInterval);
+        if (onlineCheckInterval) clearInterval(onlineCheckInterval);
+        if (cleanupOnlineListener) cleanupOnlineListener();
+        if (cleanupNotificationListener) cleanupNotificationListener();
+
+        // Mark as offline when leaving
+        axios.post('/user/offline').catch(() => { });
+
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+    });
+});
+
+const handleVisibilityChange = () => {
+    if (document.hidden) {
+        // Tab is hidden, mark as offline
+        axios.post('/user/offline').catch(() => { });
+    } else {
+        // Tab is visible again, mark as online
+        sendPing();
+    }
+};
+
+// Count online users
+const onlineCount = computed(() => {
+    return Object.values(onlineStatuses.value).filter(status => status).length;
+});
+
+// Helper to get last seen time
+const getLastSeenTime = (user) => {
+    if (!user.last_seen_at) return 'Never';
+
+    const lastSeen = new Date(user.last_seen_at);
+    const now = new Date();
+    const diffMs = now - lastSeen;
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+};
 </script>
 
 <template>
@@ -58,196 +185,274 @@ const startChat = (userId) => {
     <Head title="Dashboard" />
 
     <AppLayout :breadcrumbs="breadcrumbs">
-        <div class="p-6">
-            <!-- Header -->
-            <div class="mb-8">
-                <h1 class="text-2xl font-bold text-gray-900">
-                    {{ isAdmin ? 'All Users' : 'Support Team' }}
-                </h1>
-                <p class="text-gray-600 mt-2">
-                    {{ isAdmin ? 'Manage and view all system users' : 'Chat with our support team' }}
-                </p>
+        <div class="min-h-screen bg-white dark:bg-gray-900 transition-colors duration-200">
+            <div class="p-6">
+                <!-- Header -->
+                <div class="mb-8">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
+                                {{ isAdmin ? 'User Management' : 'Support Dashboard' }}
+                            </h1>
+                            <p class="text-gray-600 dark:text-gray-300 mt-2">
+                                {{ isAdmin ? 'Manage and view all system users' : 'Chat with our support team' }}
+                            </p>
+                        </div>
 
-                <!-- Role Badge -->
-                <div class="mt-2">
-                    <span :class="[
-                        'inline-flex items-center px-3 py-1 rounded-full text-sm font-medium',
-                        isAdmin
-                            ? 'bg-purple-100 text-purple-800'
-                            : 'bg-blue-100 text-blue-800'
-                    ]">
-                        {{ isAdmin ? 'Administrator' : 'User' }}
-                    </span>
+                        <!-- Role Badge with Online Status -->
+                        <div class="flex items-center gap-4">
+                            <div class="flex items-center">
+                                <div class="relative mr-2">
+                                    <div class="h-2 w-2 rounded-full bg-green-500"></div>
+                                    <div class="absolute h-2 w-2 rounded-full bg-green-500 animate-ping"></div>
+                                </div>
+                                <span class="text-sm text-gray-600 dark:text-gray-300">Online</span>
+                            </div>
+                            <span :class="[
+                                'inline-flex items-center px-4 py-2 rounded-full text-sm font-semibold',
+                                'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                            ]">
+                                {{ isAdmin ? 'Administrator' : 'User' }}
+                                <div class="ml-2 h-2 w-2 rounded-full bg-blue-500 dark:bg-blue-400"></div>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Decorative line -->
+                    <div class="mt-4 h-1 w-24 bg-blue-500 rounded-full"></div>
                 </div>
-            </div>
 
-            <!-- Stats Cards -->
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                <div class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-3 rounded-full bg-blue-100 text-blue-600">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                    <!-- Total Users Card -->
+                    <div
+                        class="relative overflow-hidden rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-300">
+                        <div class="flex items-center">
+                            <div class="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                                </svg>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600 dark:text-gray-300">Total Users</p>
+                                <p class="text-2xl font-bold text-gray-900 dark:text-white">{{ filteredUsers.length }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Online Users Card -->
+                    <div
+                        class="relative overflow-hidden rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6 hover:border-green-400 dark:hover:border-green-500 transition-all duration-300">
+                        <div class="flex items-center">
+                            <div
+                                class="p-3 rounded-lg bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600 dark:text-gray-300">Online Now</p>
+                                <p class="text-2xl font-bold text-gray-900 dark:text-white">
+                                    {{ onlineCount }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Admin Users Card -->
+                    <div v-if="isAdmin"
+                        class="relative overflow-hidden rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-300">
+                        <div class="flex items-center">
+                            <div class="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                </svg>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600 dark:text-gray-300">Admin Users</p>
+                                <p class="text-2xl font-bold text-gray-900 dark:text-white">
+                                    {{props.users.filter(user => user.role === 'admin').length}}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Regular Users Card -->
+                    <div v-if="isAdmin"
+                        class="relative overflow-hidden rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6 hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-300">
+                        <div class="flex items-center">
+                            <div class="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600 dark:text-gray-300">Regular Users</p>
+                                <p class="text-2xl font-bold text-gray-900 dark:text-white">
+                                    {{props.users.filter(user => user.role !== 'admin').length}}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Users Section -->
+                <div
+                    class="relative rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-6">
+                    <!-- Header Section -->
+                    <div class="mb-8">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+                                    {{ isAdmin ? 'User Directory' : 'Support Team' }}
+                                </h2>
+                                <p class="text-gray-600 dark:text-gray-300 mt-1">
+                                    {{ isAdmin
+                                        ? 'Manage your team members and their account permissions here.'
+                                        : 'Our support team is here to help you with any questions or issues.'
+                                    }}
+                                </p>
+                            </div>
+                            <div
+                                class="text-sm px-3 py-1 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                {{ isAdmin ? `${filteredUsers.length} users` : `${filteredUsers.length} support staff`
+                                }}
+                                <span class="ml-2 text-green-600 dark:text-green-400">
+                                    • {{ onlineCount }} online
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Users Grid -->
+                    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        <div v-for="user in filteredUsers" :key="user.id"
+                            class="group relative overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 transition-all duration-300 hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-md">
+
+                            <!-- Notification Badge -->
+                            <div v-if="getNotificationCount(user.id) > 0" class="absolute top-3 right-3 z-10">
+                                <div class="relative">
+                                    <span
+                                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                    <span
+                                        class="relative inline-flex items-center justify-center h-6 w-6 rounded-full bg-red-500 text-white text-xs font-bold shadow">
+                                        {{ getNotificationCount(user.id) > 9 ? '9+' : getNotificationCount(user.id) }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Online Status Indicator -->
+                            <div class="absolute top-3 left-3 z-10">
+                                <div class="relative">
+                                    <div v-if="onlineStatuses[user.id]"
+                                        class="h-3 w-3 rounded-full bg-green-500 border-2 border-white dark:border-gray-800">
+                                        <div class="absolute h-3 w-3 rounded-full bg-green-500 animate-ping"></div>
+                                    </div>
+                                    <div v-else
+                                        class="h-3 w-3 rounded-full bg-gray-400 border-2 border-white dark:border-gray-800">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- User Avatar/Initials -->
+                            <div class="flex items-center gap-4">
+                                <div
+                                    class="relative flex h-14 w-14 items-center justify-center rounded-full font-bold text-lg bg-blue-500 text-white">
+                                    {{ getInitials(user.name) }}
+                                </div>
+                                <div class="flex-1 min-w-0">
+                                    <div class="flex items-center gap-2">
+                                        <h3
+                                            class="font-semibold text-gray-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                            {{ user.name }}
+                                        </h3>
+                                        <span v-if="onlineStatuses[user.id]"
+                                            class="text-xs text-green-600 dark:text-green-400 font-medium">
+                                            • Online
+                                        </span>
+                                        <span v-else class="text-xs text-gray-500 dark:text-gray-400">
+                                            • {{ getLastSeenTime(user) }}
+                                        </span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 dark:text-gray-400 truncate mt-1">
+                                        {{ user.email }}
+                                    </p>
+                                    <!-- Role Badge -->
+                                    <span :class="[
+                                        'inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold',
+                                        user.role === 'admin'
+                                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                                    ]">
+                                        {{ user.role === 'admin' ? 'Administrator' : 'User' }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- User Details -->
+                            <div class="mt-6 space-y-3">
+                                <div class="flex items-center justify-between text-sm">
+                                    <span class="text-gray-600 dark:text-gray-400">User ID:</span>
+                                    <span
+                                        class="font-mono text-gray-900 dark:text-white bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">#{{
+                                            user.id }}</span>
+                                </div>
+                                <div v-if="user.last_seen_at && !onlineStatuses[user.id]"
+                                    class="flex items-center justify-between text-sm">
+                                    <span class="text-gray-600 dark:text-gray-400">Last Seen:</span>
+                                    <span class="text-gray-900 dark:text-white">
+                                        {{ getLastSeenTime(user) }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="mt-6 flex gap-3">
+                                <button @click="startChat(user.id)"
+                                    class="flex-1 rounded-lg px-4 py-3 text-sm font-semibold transition-all duration-300 hover:shadow"
+                                    :class="onlineStatuses[user.id]
+                                        ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                                        : 'bg-blue-400 hover:bg-blue-500 text-white opacity-90'">
+                                    {{ onlineStatuses[user.id] ? 'Chat Now' : 'Send Message' }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div v-if="filteredUsers.length === 0"
+                        class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 p-12 text-center">
+                        <div class="rounded-full bg-blue-50 dark:bg-blue-900/30 p-6">
+                            <svg class="h-12 w-12 text-blue-500 dark:text-blue-400" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
                             </svg>
                         </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">Total Users</p>
-                            <p class="text-2xl font-bold text-gray-900">{{ filteredUsers.length }}</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Admin-only stats -->
-                <div v-if="isAdmin" class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-3 rounded-full bg-green-100 text-green-600">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                            </svg>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">Admin Users</p>
-                            <p class="text-2xl font-bold text-gray-900">
-                                {{props.users.filter(user => user.role === 'admin').length}}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-
-                <div v-if="isAdmin" class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-3 rounded-full bg-orange-100 text-orange-600">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                            </svg>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">Regular Users</p>
-                            <p class="text-2xl font-bold text-gray-900">
-                                {{props.users.filter(user => user.role !== 'admin').length}}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Users Grid -->
-            <div class="flex h-full flex-1 flex-col gap-6 overflow-x-auto rounded-xl p-4">
-                <!-- Header Section -->
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-                            {{ isAdmin ? 'All Users' : 'Support Team' }}
-                        </h1>
-                        <p class="text-gray-600 dark:text-gray-400 mt-1">
+                        <h3 class="mt-6 text-xl font-semibold text-gray-900 dark:text-white">
+                            {{ isAdmin ? 'No users found' : 'No support staff available' }}
+                        </h3>
+                        <p class="mt-3 text-gray-600 dark:text-gray-400 max-w-md">
                             {{ isAdmin
-                                ? 'Manage your team members and their account permissions here.'
-                                : 'Our support team is here to help you with any questions or issues.'
+                                ? 'Get started by inviting your first team member.'
+                                : 'Please check back later or contact system administrator.'
                             }}
                         </p>
                     </div>
-                    <div class="text-sm text-gray-500 dark:text-gray-400">
-                        {{ isAdmin ? `Total: ${filteredUsers.length} users` : `${filteredUsers.length} support staff
-                        available` }}
-                    </div>
                 </div>
 
-                <!-- Users Grid -->
-                <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    <div v-for="user in filteredUsers" :key="user.id"
-                        class="group relative overflow-hidden rounded-xl border border-sidebar-border/70 bg-white p-6 transition-all duration-200 hover:shadow-lg dark:border-sidebar-border dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600">
-
-                        <!-- User Avatar/Initials -->
-                        <div class="flex items-center gap-4">
-                            <div :class="[
-                                'flex h-12 w-12 items-center justify-center rounded-full text-white font-semibold text-sm',
-                                user.role === 'admin'
-                                    ? 'bg-gradient-to-br from-purple-500 to-pink-600'
-                                    : 'bg-gradient-to-br from-blue-500 to-cyan-600'
-                            ]">
-                                {{ getInitials(user.name) }}
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <h3
-                                    class="font-semibold text-gray-900 truncate dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                    {{ user.name }}
-                                </h3>
-                                <p class="text-sm text-gray-500 truncate dark:text-gray-400 mt-1">
-                                    {{ user.email }}
-                                </p>
-                                <!-- Role Badge -->
-                                <span :class="[
-                                    'inline-block mt-1 px-2 py-0.5 rounded-full text-xs font-medium',
-                                    user.role === 'admin'
-                                        ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300'
-                                        : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'
-                                ]">
-                                    {{ user.role === 'admin' ? 'Admin' : 'User' }}
-                                </span>
-                            </div>
-                        </div>
-
-                        <!-- User Details -->
-                        <div class="mt-4 space-y-2">
-                            <div class="flex items-center justify-between text-sm">
-                                <span class="text-gray-500 dark:text-gray-400">User ID:</span>
-                                <span class="font-mono text-gray-700 dark:text-gray-300">#{{ user.id }}</span>
-                            </div>
-                            <div v-if="user.created_at" class="flex items-center justify-between text-sm">
-                                <span class="text-gray-500 dark:text-gray-400">Joined:</span>
-                                <span class="text-gray-700 dark:text-gray-300">
-                                    {{ new Date(user.created_at).toLocaleDateString() }}
-                                </span>
-                            </div>
-                        </div>
-
-                        <!-- Action Buttons -->
-                        <div class="mt-6 flex gap-2">
-                            <button @click="startChat(user.id)"
-                                class="flex-1 rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-600 transition-all hover:bg-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:hover:bg-blue-900/30">
-                                {{ isAdmin ? 'Chat' : 'Chat' }}
-                            </button>
-                            <button v-if="isAdmin"
-                                class="flex-1 rounded-lg bg-gray-50 px-3 py-2 text-sm font-medium text-gray-600 transition-all hover:bg-gray-100 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600">
-                                Edit
-                            </button>
-                        </div>
-
-                        <!-- Hover effect background -->
-                        <div :class="[
-                            'absolute inset-0 -z-10 bg-gradient-to-br opacity-0 transition-opacity duration-200 group-hover:opacity-100',
-                            user.role === 'admin'
-                                ? 'from-purple-50 to-pink-50 dark:from-purple-900/10 dark:to-pink-900/10'
-                                : 'from-blue-50 to-cyan-50 dark:from-blue-900/10 dark:to-cyan-900/10'
-                        ]" />
-                    </div>
-                </div>
-
-                <!-- Empty State -->
-                <div v-if="filteredUsers.length === 0"
-                    class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 p-12 text-center dark:border-gray-600">
-                    <div class="rounded-full bg-gray-100 p-4 dark:bg-gray-700">
-                        <svg class="h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-                        </svg>
-                    </div>
-                    <h3 class="mt-4 text-lg font-medium text-gray-900 dark:text-white">
-                        {{ isAdmin ? 'No users found' : 'No support staff available' }}
-                    </h3>
-                    <p class="mt-2 text-gray-500 dark:text-gray-400">
-                        {{ isAdmin
-                            ? 'Get started by creating your first user.'
-                            : 'Please check back later or contact system administrator.'
-                        }}
+                <!-- Footer Note -->
+                <div class="mt-8 text-center">
+                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                        <span class="text-blue-600 dark:text-blue-400 font-medium">BOA Chat</span> • Secure
+                        communication powered by
+                        <span class="text-gray-700 dark:text-gray-300 font-medium">Realpay Global Services</span>
                     </p>
-                    <button v-if="isAdmin"
-                        class="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700">
-                        Add User
-                    </button>
                 </div>
             </div>
         </div>

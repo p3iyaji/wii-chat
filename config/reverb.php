@@ -30,14 +30,15 @@ return [
 
         'reverb' => [
             'host' => env('REVERB_SERVER_HOST', '0.0.0.0'),
-            'port' => env('REVERB_SERVER_PORT', 8081),
+            // local server 8080 while online server 8081
+            'port' => env('REVERB_SERVER_PORT', 8080),
             'path' => env('REVERB_SERVER_PATH', ''),
             'hostname' => env('REVERB_HOST'),
             'options' => [
                 'tls' => [
-			   'verify_peer' => env('REVERB_LOCAL_HTTPS_VERIFY', true),
-       			   'verify_peer_name' => env('REVERB_LOCAL_HTTPS_VERIFY', true),
-				],
+                    'verify_peer' => env('REVERB_LOCAL_HTTPS_VERIFY', true),
+                    'verify_peer_name' => env('REVERB_LOCAL_HTTPS_VERIFY', true),
+                ],
             ],
             'max_request_size' => env('REVERB_MAX_REQUEST_SIZE', 10_000),
             'scaling' => [
