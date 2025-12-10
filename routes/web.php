@@ -72,7 +72,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 $query->whereNull('deleted_for_user_id')
                     ->orWhere('deleted_for_user_id', '!=', auth()->id());
             })
-            ->with('sender', 'receiver')
+            ->with(['sender', 'receiver', 'repliedTo'])
             ->orderBy('created_at', 'asc')
             ->get();
 
@@ -97,37 +97,32 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 $query->whereNull('deleted_for_user_id')
                     ->orWhere('deleted_for_user_id', '!=', auth()->id());
             })
-            ->with('sender', 'receiver')
+            ->with(['sender', 'receiver', 'repliedTo']) // Add 'repliedTo' here
             ->orderBy('created_at', 'asc')
             ->get();
     })->middleware(['auth']);
 
     Route::post('/messages/{friend}', function (User $friend) {
         request()->validate([
-            'message' => 'required|string|max:1000'
+            'message' => 'required|string|max:1000',
+            'reply_to' => 'nullable|exists:chat_messages,id'
         ]);
 
         $message = ChatMessage::create([
             'sender_id' => auth()->id(),
             'receiver_id' => $friend->id,
-            'body' => request()->input('message')
+            'body' => request()->input('message'),
+            'reply_to' => request()->input('reply_to')
         ]);
 
-        // Load relationships before broadcasting
-        $message->load('sender');
+        // Load all relationships including repliedTo
+        $message->load(['sender', 'receiver', 'repliedTo']);
 
-        \Log::info('Broadcasting message', [
-            'channel' => "chat.{$message->receiver_id}",
-            'event' => 'MessageSent',
-            'message_id' => $message->id
-        ]);
-
-        broadcast(new MessageSent($message))->toOthers();
-        \Log::info('Broadcast successful', ['message_id' => $message->id]);
+        broadcast(new MessageSent($message));
 
         return response()->json($message);
-
     })->middleware(['auth']);
+
 
     // Typing indicator endpoint
     Route::post('/typing/{friend}', function (User $friend) {
