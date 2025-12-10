@@ -663,7 +663,8 @@ const testTyping = () => {
                                 <div class="text-xs text-gray-500 mb-1">Replying to</div>
                                 <div
                                     class="bg-gray-100 border-l-2 border-gray-300 pl-2 py-1 text-xs text-gray-600 rounded">
-                                    <p class="truncate">{{ message.replied_to?.body || 'Original message' }}</p>
+                                    <p class="truncate">{{ message.replied_to?.body || message.reply_to_body ||
+                                        'Original message' }}</p>
                                 </div>
                             </div>
 
@@ -807,7 +808,7 @@ const testTyping = () => {
                     <!-- Text Input -->
                     <input type="text" v-model="newMessage" @input="handleTyping" @keyup.enter="sendMessage"
                         placeholder="Type a message..."
-                        class="flex-1 px-3 py-1.5 md:px-4 md:py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base" />
+                        class="flex-1 px-3 py-1.5 md:px-4 md:py-2 dark:text-gray-700 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base" />
 
                     <!-- Send Button -->
                     <button @click="sendMessage" :disabled="!newMessage.trim() && !isUploading"
