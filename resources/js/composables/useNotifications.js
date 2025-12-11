@@ -111,4 +111,4 @@ export function useNotifications() {
         clearAllNotifications,
         setupGlobalListener
     };
-}
+} 
