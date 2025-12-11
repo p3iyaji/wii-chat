@@ -380,6 +380,28 @@ onMounted(() => {
     });
 });
 
+const showBrowserNotification = (title, options) => {
+    // Check if browser supports notifications
+    if (!("Notification" in window)) {
+        console.log("This browser does not support desktop notification");
+        return;
+    }
+
+    // Check if permission is already granted
+    if (Notification.permission === "granted") {
+        new Notification(title, options);
+    }
+    // Otherwise, ask for permission
+    else if (Notification.permission !== "denied") {
+        Notification.requestPermission().then(permission => {
+            if (permission === "granted") {
+                new Notification(title, options);
+            }
+        });
+    }
+    // Permission was denied earlier
+}
+
 const getLastSeenTime = (lastSeenAt) => {
     if (!lastSeenAt) return 'a while ago';
 
@@ -507,6 +529,17 @@ const handleIncomingEvent = (e) => {
                 if (e.message.sender_id === props.user.id) {
                     playNotificationSound();
                     addNotification(props.user.id);
+
+                    // Show browser notification if not in focus
+                    if (document.visibilityState !== 'visible') {
+                        showBrowserNotification(
+                            `New message from ${props.user.name}`,
+                            {
+                                body: e.message.body.substring(0, 50) + (e.message.body.length > 50 ? '...' : ''),
+                                icon: '/favicon.ico'
+                            }
+                        );
+                    }
                 }
             } else {
                 addDebug('⚠️ Message already exists, skipping...');
@@ -519,6 +552,17 @@ const handleIncomingEvent = (e) => {
                 e.message.receiver_id === page.props.auth.user.id) {
                 playNotificationSound();
                 addNotification(e.message.sender_id);
+
+                // Show browser notification if not in focus
+                if (document.visibilityState !== 'visible') {
+                    showBrowserNotification(
+                        `New message from User #${e.message.sender_id}`,
+                        {
+                            body: e.message.body.substring(0, 50) + (e.message.body.length > 50 ? '...' : ''),
+                            icon: '/favicon.ico'
+                        }
+                    );
+                }
             }
         }
     } else {
