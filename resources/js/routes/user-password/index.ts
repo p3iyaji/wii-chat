@@ -151,4 +151,9 @@ const userPassword = {
     update: Object.assign(update, update),
 }
 
+export default userPasswordsword = {
+    edit: Object.assign(edit, edit),
+    update: Object.assign(update, update),
+}
+
 export default userPassword

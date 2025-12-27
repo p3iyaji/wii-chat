@@ -9,6 +9,12 @@ import axios from 'axios';
 const page = usePage();
 const { getNotificationCount, markAsRead, setupGlobalListener } = useNotifications();
 const onlineStatuses = ref({});
+const showDeleteModal = ref(false);
+const userToDelete = ref(null);
+const isDeleting = ref(false);
+const showCreateModal = ref(false);
+const showEditModal = ref(false);
+const userToEdit = ref(null);
 
 const props = defineProps({
     users: {
@@ -41,6 +47,54 @@ const filteredUsers = computed(() => {
     }
 });
 
+// User deletion functions
+const confirmDeleteUser = (user) => {
+    userToDelete.value = user;
+    showDeleteModal.value = true;
+};
+
+const deleteUser = async () => {
+    if (!userToDelete.value) return;
+
+    isDeleting.value = true;
+    try {
+        const response = await axios.delete(`/users/${userToDelete.value.id}`);
+
+        if (response.data.success) {
+            // Remove user from list
+            const index = props.users.findIndex(u => u.id === userToDelete.value.id);
+            if (index !== -1) {
+                props.users.splice(index, 1);
+            }
+
+            // Close modal and reset
+            showDeleteModal.value = false;
+            userToDelete.value = null;
+
+            // Show success message
+            alert('User deleted successfully');
+        } else {
+            throw new Error(response.data.message || 'Failed to delete user');
+        }
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        alert(error.response?.data?.message || error.message || 'Failed to delete user');
+    } finally {
+        isDeleting.value = false;
+    }
+};
+
+// User creation/editing functions
+const openCreateModal = () => {
+    showCreateModal.value = true;
+};
+
+const openEditModal = (user) => {
+    userToEdit.value = { ...user };
+    showEditModal.value = true;
+};
+
+// Online status functions
 const getInitials = (name) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
 }
@@ -80,6 +134,7 @@ const setupOnlineStatusListener = () => {
             const channel = window.Echo.join('online-users');
 
             channel.here((users) => {
+                console.log('Users online:', users);
                 users.forEach(user => {
                     if (user.id !== page.props.auth.user.id) {
                         onlineStatuses.value[user.id] = true;
@@ -87,16 +142,19 @@ const setupOnlineStatusListener = () => {
                 });
             })
                 .joining((user) => {
+                    console.log('User joining:', user);
                     if (user.id !== page.props.auth.user.id) {
                         onlineStatuses.value[user.id] = true;
                     }
                 })
                 .leaving((user) => {
+                    console.log('User leaving:', user);
                     if (user.id !== page.props.auth.user.id) {
                         onlineStatuses.value[user.id] = false;
                     }
                 })
                 .listen('.UserOnlineStatusUpdated', (e) => {
+                    console.log('Online status update:', e);
                     if (e.user && e.user.id !== page.props.auth.user.id) {
                         onlineStatuses.value[e.user.id] = e.is_online;
                     }
@@ -191,6 +249,15 @@ const getLastSeenTime = (user) => {
             <!-- Add this if your AppLayout doesn't have mobile menu toggle -->
 
             <div class="p-4 sm:p-6">
+                <div v-if="isAdmin" class="mb-6">
+                    <button @click="openCreateModal"
+                        class="inline-flex items-center px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                        </svg>
+                        Add New User
+                    </button>
+                </div>
                 <!-- Header -->
                 <div class="mb-6 sm:mb-8">
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -435,14 +502,33 @@ const getLastSeenTime = (user) => {
                             </div>
 
                             <!-- Action Buttons -->
-                            <div class="mt-4 sm:mt-6">
+                            <!-- Inside each user card, add these buttons in the Action Buttons section -->
+                            <div class="mt-4 sm:mt-6 flex gap-2">
                                 <button @click="startChat(user.id)"
-                                    class="w-full rounded-lg px-3 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm font-semibold transition-all duration-300 hover:shadow-sm"
+                                    class="flex-1 rounded-lg px-3 py-2.5 sm:px-4 sm:py-3 text-xs sm:text-sm font-semibold transition-all duration-300 hover:shadow-sm"
                                     :class="onlineStatuses[user.id]
                                         ? 'bg-blue-500 hover:bg-blue-600 text-white'
                                         : 'bg-blue-400 hover:bg-blue-500 text-white opacity-90'">
                                     {{ onlineStatuses[user.id] ? 'Chat Now' : 'Send Message' }}
                                 </button>
+
+                                <!-- Admin actions -->
+                                <div v-if="isAdmin" class="flex gap-1">
+                                    <button @click="openEditModal(user)"
+                                        class="px-2 py-2.5 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                    </button>
+                                    <button @click="confirmDeleteUser(user)"
+                                        class="px-2 py-2.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -476,6 +562,38 @@ const getLastSeenTime = (user) => {
                         communication powered by
                         <span class="text-gray-700 dark:text-gray-300 font-medium">Realpay Global Services</span>
                     </p>
+                </div>
+            </div>
+        </div>
+        <!-- Delete Confirmation Modal -->
+        <div v-if="showDeleteModal"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Delete User</h3>
+                    <button @click="showDeleteModal = false" class="text-gray-400 hover:text-gray-500">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <p class="text-gray-600 dark:text-gray-300 mb-6">
+                    Are you sure you want to delete <span class="font-semibold">{{ userToDelete?.name }}</span>?
+                    This action cannot be undone and will permanently delete all their messages.
+                </p>
+
+                <div class="flex justify-end gap-3">
+                    <button @click="showDeleteModal = false"
+                        class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">
+                        Cancel
+                    </button>
+                    <button @click="deleteUser" :disabled="isDeleting"
+                        class="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        <span v-if="isDeleting">Deleting...</span>
+                        <span v-else>Delete User</span>
+                    </button>
                 </div>
             </div>
         </div>

@@ -50,32 +50,45 @@ const setupUserOnlineListener = () => {
                 addDebug(`Users currently online: ${users.length}`);
                 const isUserHere = users.some(u => u.id === props.user.id);
                 otherUserOnline.value = isUserHere;
+                addDebug(`User ${props.user.name} online status: ${isUserHere}`);
             })
                 .joining((user) => {
-                    addDebug(`User joining: ${user.name}`);
+                    addDebug(`User joining: ${user.name} (ID: ${user.id})`);
                     if (user.id === props.user.id) {
                         otherUserOnline.value = true;
+                        addDebug(`✅ ${user.name} is now online`);
                     }
                 })
                 .leaving((user) => {
-                    addDebug(`User leaving: ${user.name}`);
+                    addDebug(`User leaving: ${user.name} (ID: ${user.id})`);
                     if (user.id === props.user.id) {
                         otherUserOnline.value = false;
+                        addDebug(`❌ ${user.name} is now offline`);
                     }
                 })
                 .listen('.UserOnlineStatusUpdated', (e) => {
                     addDebug(`Online status update received: ${JSON.stringify(e)}`);
                     if (e.user && e.user.id === props.user.id) {
                         otherUserOnline.value = e.is_online;
+                        addDebug(`🔄 ${e.user.name} online status updated to: ${e.is_online}`);
                     }
                 });
 
+            // Handle errors
+            channel.error((error) => {
+                addDebug(`❌ Online users channel error: ${JSON.stringify(error)}`);
+            });
+
             return () => {
                 window.Echo.leave('online-users');
+                addDebug('Left online-users channel');
             };
         } catch (error) {
             console.error('Online listener error:', error);
+            addDebug(`❌ Online listener error: ${error.message}`);
         }
+    } else {
+        addDebug('❌ Echo is not available for online listener');
     }
     return () => { };
 }
@@ -345,6 +358,153 @@ const downloadFile = (message) => {
     }
 }
 
+const loadMessages = () => {
+    axios.get(`/messages/${props.user.id}`).then((response) => {
+        messages.value = response.data;
+        // Mark notifications as read when loading messages
+        markAsRead(props.user.id);
+        scrollToBottom();
+    }).catch(error => {
+        console.error('Error loading messages: ', error);
+    });
+}
+
+const clearDebug = () => {
+    debugLog.value = [];
+}
+
+const testBroadcast = () => {
+    addDebug('🧪 Testing ShouldBroadcastNow...');
+    axios.post(`/messages/${props.user.id}`, {
+        message: 'Test message - ShouldBroadcastNow'
+    }).then((response) => {
+        addDebug('Test message sent - should appear instantly via broadcast');
+    });
+}
+
+const testTyping = () => {
+    addDebug('🧪 Testing typing indicator...');
+    setTyping(true);
+    setTimeout(() => setTyping(false), 2000);
+}
+
+// Enhanced refresh method
+const refreshChat = async (showNotification = true) => {
+    try {
+        // Add visual feedback
+        const container = messagesContainer.value;
+        if (container) {
+            container.style.opacity = '0.8';
+            container.style.transition = 'opacity 0.3s';
+        }
+
+        const response = await axios.get(`/messages/${props.user.id}/refresh`);
+
+        if (response.data.messages) {
+            messages.value = response.data.messages;
+            addDebug(`Refreshed chat with ${response.data.messages.length} messages`);
+
+            // Update user info if available
+            if (response.data.user) {
+                otherUserOnline.value = response.data.user.is_online;
+            }
+
+            scrollToBottom();
+
+            if (showNotification) {
+                addDebug('✅ Chat refreshed successfully');
+                // Show subtle notification
+                const notification = document.createElement('div');
+                notification.className = 'fixed top-4 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-md z-50 animate-fadeInOut';
+                notification.textContent = 'Chat refreshed';
+                document.body.appendChild(notification);
+                setTimeout(() => notification.remove(), 2000);
+            }
+        }
+    } catch (error) {
+        console.error('Error refreshing chat:', error);
+        addDebug('❌ Error refreshing chat');
+    } finally {
+        // Restore opacity
+        if (container) {
+            container.style.opacity = '1';
+        }
+    }
+}
+
+// Total deletion for both users
+const deleteAllMessages = async () => {
+    if (!confirm('⚠️ DANGER: This will PERMANENTLY delete ALL messages for BOTH users!\n\nThis action cannot be undone. Continue?')) {
+        return;
+    }
+
+    try {
+        const response = await axios.delete(`/messages/${props.user.id}/delete-all`);
+
+        if (response.data.success) {
+            // Clear local messages
+            messages.value = [];
+            clearNotifications(props.user.id);
+
+            addDebug(`✅ ${response.data.deleted} messages deleted permanently`);
+
+            // Show success message
+            alert(`✅ Success! ${response.data.deleted} messages have been permanently deleted for both users.`);
+
+            // Refresh to ensure UI is in sync
+            await refreshChat(false);
+        } else {
+            throw new Error(response.data.message || 'Deletion failed');
+        }
+    } catch (error) {
+        console.error('Error deleting messages:', error);
+        addDebug(`❌ Error: ${error.message}`);
+        alert(`❌ Error: ${error.response?.data?.message || error.message}`);
+    }
+}
+
+// Enhanced handleRefreshClick with visual feedback
+const handleRefreshClick = async () => {
+    const button = event?.currentTarget;
+    if (button) {
+        // Add rotating animation
+        button.classList.add('refreshing');
+        button.disabled = true;
+
+        // Refresh
+        await refreshChat();
+
+        // Remove animation
+        setTimeout(() => {
+            button.classList.remove('refreshing');
+            button.disabled = false;
+        }, 1000);
+    } else {
+        await refreshChat();
+    }
+}
+
+// Auto-refresh setup
+const setupAutoRefresh = () => {
+    // Refresh when window gains focus
+    window.addEventListener('focus', () => {
+        if (document.visibilityState === 'visible') {
+            addDebug('Window focused - refreshing chat');
+            refreshChat(false);
+        }
+    });
+
+    // Optional: Periodic refresh (every 60 seconds)
+    const refreshInterval = setInterval(() => {
+        if (document.hasFocus() && document.visibilityState === 'visible') {
+            refreshChat(false);
+        }
+    }, 60000);
+
+    // Store interval for cleanup
+    return refreshInterval;
+}
+
 onMounted(() => {
     messages.value = props.initialMessages;
     addDebug(`Component mounted with ${props.initialMessages.length} initial messages`);
@@ -369,6 +529,9 @@ onMounted(() => {
     initializeEcho();
     scrollToBottom();
 
+    // Setup auto refresh
+    const refreshInterval = setupAutoRefresh();
+
     // Cleanup on unmount
     onUnmounted(() => {
         if (cleanupOnlineListener) cleanupOnlineListener();
@@ -376,6 +539,11 @@ onMounted(() => {
             window.Echo.leave(`chat.${page.props.auth.user.id}`);
             addDebug('Echo listeners cleaned up');
         }
+
+        if (refreshInterval) {
+            clearInterval(refreshInterval);
+        }
+
         clearTimeout(typingTimeout.value);
     });
 });
@@ -569,41 +737,11 @@ const handleIncomingEvent = (e) => {
         addDebug(`❌ No message data in event: ${JSON.stringify(e)}`);
     }
 }
-
-const loadMessages = () => {
-    axios.get(`/messages/${props.user.id}`).then((response) => {
-        messages.value = response.data;
-        // Mark notifications as read when loading messages
-        markAsRead(props.user.id);
-        scrollToBottom();
-    }).catch(error => {
-        console.error('Error loading messages: ', error);
-    });
-}
-
-const clearDebug = () => {
-    debugLog.value = [];
-}
-
-const testBroadcast = () => {
-    addDebug('🧪 Testing ShouldBroadcastNow...');
-    axios.post(`/messages/${props.user.id}`, {
-        message: 'Test message - ShouldBroadcastNow'
-    }).then((response) => {
-        addDebug('Test message sent - should appear instantly via broadcast');
-    });
-}
-
-const testTyping = () => {
-    addDebug('🧪 Testing typing indicator...');
-    setTyping(true);
-    setTimeout(() => setTyping(false), 2000);
-}
 </script>
 
 <template>
 
-    <Head :title="`Chat with ${user.name}`" />
+    <Head :title="`Chat with ${getInitials(user.name)}`" />
 
     <AppLayout :breadcrumbs="breadcrumbs">
         <div class="max-w-4xl mx-auto p-4 md:p-6">
@@ -642,6 +780,7 @@ const testTyping = () => {
             </div>
 
             <!-- Chat Header -->
+            <!-- Updated Chat Header -->
             <div class="bg-white rounded-lg shadow p-3 md:p-4 mb-4 md:mb-6">
                 <div class="flex flex-col md:flex-row md:justify-between md:items-center space-y-3 md:space-y-0">
                     <div class="flex items-center space-x-3 md:space-x-4">
@@ -667,18 +806,35 @@ const testTyping = () => {
                             </div>
                         </div>
                     </div>
-                    <div class="flex space-x-2 md:space-x-2">
-                        <button @click="loadMessages"
-                            class="flex-1 md:flex-none px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
-                            Refresh
+
+                    <!-- Action Buttons - UPDATED -->
+                    <div class="flex flex-wrap gap-2 mt-2 md:mt-0">
+                        <!-- Refresh Button -->
+                        <button @click="handleRefreshClick"
+                            class="flex items-center space-x-2 px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg transition-colors">
+                            <svg class="w-3 h-3 md:w-4 md:h-4 refresh-icon" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            <span>Refresh</span>
                         </button>
+
+                        <!-- Clear for Me -->
                         <button @click="clearMessages"
-                            class="flex-1 md:flex-none px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors">
-                            Clear Chat
+                            class="px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm bg-yellow-100 text-yellow-700 hover:bg-yellow-200 rounded-lg transition-colors">
+                            Clear for Me
+                        </button>
+
+                        <!-- Delete All -->
+                        <button @click="deleteAllMessages"
+                            class="px-3 py-1.5 md:px-4 md:py-2 text-xs md:text-sm bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-colors">
+                            Delete All
                         </button>
                     </div>
                 </div>
             </div>
+
 
             <!-- Messages Container with Drop Zone -->
             <div ref="messagesContainer" @dragover="handleDragOver" @drop="handleDrop"
@@ -775,10 +931,7 @@ const testTyping = () => {
                                         ? 'text-blue-100'
                                         : 'text-gray-500'
                                 ]">
-                                    <span>{{ new Date(message.created_at).toLocaleTimeString([], {
-                                        hour: '2-digit',
-                                        minute: '2-digit'
-                                    }) }}</span>
+                                    <span>{{ new Date(message.created_at).toLocaleString() }}</span>
                                     <span class="ml-2 hidden md:inline">Click to reply</span>
                                     <span class="ml-2 md:hidden">↩️</span>
                                 </p>
@@ -850,9 +1003,10 @@ const testTyping = () => {
                     </button>
 
                     <!-- Text Input -->
-                    <input type="text" v-model="newMessage" @input="handleTyping" @keyup.enter="sendMessage"
+                    <textarea row="3" type="text" v-model="newMessage" @input="handleTyping" @keyup.enter="sendMessage"
                         placeholder="Type a message..."
-                        class="flex-1 px-3 py-1.5 md:px-4 md:py-2 dark:text-gray-700 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base" />
+                        class="flex-1 px-3 py-1.5 md:px-4 md:py-2 dark:text-gray-700 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm md:text-base">
+                        </textarea>
 
                     <!-- Send Button -->
                     <button @click="sendMessage" :disabled="!newMessage.trim() && !isUploading"
@@ -873,3 +1027,47 @@ const testTyping = () => {
         </div>
     </AppLayout>
 </template>
+
+<style scoped>
+/* Refresh animation */
+.refreshing .refresh-icon {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Fade in/out for notifications */
+@keyframes fadeInOut {
+    0% {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    10% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    90% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+}
+
+.animate-fadeInOut {
+    animation: fadeInOut 2s ease-in-out;
+}
+</style>

@@ -21,7 +21,9 @@ class MessageSent implements ShouldBroadcastNow
         public ?int $typingUserId = null,
         public bool $isTyping = false,
         public bool $isClearMessages = false,
-        public ?int $clearedForUserId = null
+        public ?int $clearedForUserId = null,
+        public bool $isPermanentDelete = false
+
 
     ) {
         Log::info('MessageSent event constructed', [
