@@ -18,6 +18,7 @@ Route::get('/', function () {
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', function () {
         $users = User::where('id', '!=', auth()->id())
+            ->orderBy('created_at', 'desc')
             ->get()
             ->map(function ($user) {
                 return [
@@ -25,10 +26,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
                     'name' => $user->name,
                     'email' => $user->email,
                     'role' => $user->role,
-                    'created_at' => $user->created_at,
-                    'last_seen_at' => $user->last_seen_at,
+                    'created_at' => $user->created_at->format('Y-m-d H:i:s'),
+                    'last_seen_at' => $user->last_seen_at ? $user->last_seen_at->format('Y-m-d H:i:s') : null,
                     'is_online' => $user->is_online,
-                    'is_online_now' => $user->is_online_now, // Include computed attribute
+                    'is_online_now' => $user->is_online_now,
                 ];
             });
 
@@ -37,13 +38,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ]);
     })->name('dashboard');
 
+
     // Update user activity endpoint
     Route::post('/user/ping', function () {
         $user = auth()->user();
         $user->updateLastSeen();
-
-        // Broadcast online status to other users
-        broadcast(new \App\Events\UserOnlineStatusUpdated($user, true));
 
         return response()->json(['success' => true]);
     });
@@ -52,10 +51,94 @@ Route::middleware(['auth', 'verified'])->group(function () {
         $user = auth()->user();
         $user->markAsOffline();
 
-        broadcast(new \App\Events\UserOnlineStatusUpdated($user, false));
-
         return response()->json(['success' => true]);
     });
+
+    // USER MANAGEMENT ROUTES (Admin only)
+    // Delete user
+    Route::delete('/users/{user}', function (User $user) {
+        // Prevent deleting yourself
+        if ($user->id === auth()->id()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot delete your own account.'
+            ], 403);
+        }
+
+        try {
+            DB::transaction(function () use ($user) {
+                // Delete user's messages
+                ChatMessage::where('sender_id', $user->id)
+                    ->orWhere('receiver_id', $user->id)
+                    ->delete();
+
+                // Delete the user
+                $user->delete();
+            });
+
+            \Log::info("User {$user->id} ({$user->name}) deleted by admin " . auth()->id());
+
+            return response()->json([
+                'success' => true,
+                'message' => 'User deleted successfully.'
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Error deleting user: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete user. Please try again.'
+            ], 500);
+        }
+    })->name('users.delete');
+
+    // Create new user (admin only)
+    Route::post('/users', function () {
+        request()->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users',
+            'password' => 'required|string|min:8|confirmed',
+            'role' => 'required|in:admin,user'
+        ]);
+
+        $user = User::create([
+            'name' => request('name'),
+            'email' => request('email'),
+            'password' => Hash::make(request('password')),
+            'role' => request('role')
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'user' => $user,
+            'message' => 'User created successfully.'
+        ]);
+    });
+
+    // Update user
+    Route::put('/users/{user}', function (User $user) {
+        request()->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users,email,' . $user->id,
+            'role' => 'required|in:admin,user'
+        ]);
+
+        $user->update([
+            'name' => request('name'),
+            'email' => request('email'),
+            'role' => request('role')
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'user' => $user,
+            'message' => 'User updated successfully.'
+        ]);
+    });
+
+
+
 
     Route::get('chat/{friend}', function (User $friend) {
         $messages = ChatMessage::query()
@@ -124,7 +207,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     })->middleware(['auth']);
 
 
-    // Typing indicator endpoint
+    // Update your typing route in web.php
     Route::post('/typing/{friend}', function (User $friend) {
         request()->validate([
             'is_typing' => 'required|boolean'
@@ -195,6 +278,106 @@ Route::middleware(['auth', 'verified'])->group(function () {
     })->middleware(['auth']);
 
 
+    // DELETE ALL MESSAGES (for both users)
+    Route::delete('/messages/{friend}/delete-all', function (User $friend) {
+        try {
+            $currentUserId = auth()->id();
+            $friendId = $friend->id;
+
+            // Count messages before deletion
+            $messageCount = ChatMessage::query()
+                ->where(function ($query) use ($currentUserId, $friendId) {
+                    $query->where('sender_id', $currentUserId)
+                        ->where('receiver_id', $friendId);
+                })
+                ->orWhere(function ($query) use ($currentUserId, $friendId) {
+                    $query->where('sender_id', $friendId)
+                        ->where('receiver_id', $currentUserId);
+                })
+                ->count();
+
+            // Permanently delete all messages
+            DB::transaction(function () use ($currentUserId, $friendId) {
+                ChatMessage::query()
+                    ->where(function ($query) use ($currentUserId, $friendId) {
+                        $query->where('sender_id', $currentUserId)
+                            ->where('receiver_id', $friendId);
+                    })
+                    ->orWhere(function ($query) use ($currentUserId, $friendId) {
+                        $query->where('sender_id', $friendId)
+                            ->where('receiver_id', $currentUserId);
+                    })
+                    ->delete();
+            });
+
+            // Create dummy message for broadcast event
+            $dummyMessage = new ChatMessage([
+                'sender_id' => $currentUserId,
+                'receiver_id' => $friendId
+            ]);
+
+            // Broadcast to BOTH users that messages are deleted
+            broadcast(new MessageSent(
+                message: $dummyMessage,
+                isClearMessages: true,
+                clearedForUserId: null, // null means delete for everyone
+                isPermanentDelete: true
+            ));
+
+            // Log the action
+            \Log::info("User {$currentUserId} permanently deleted {$messageCount} messages with user {$friendId}");
+
+            return response()->json([
+                'success' => true,
+                'deleted' => $messageCount,
+                'message' => "Successfully deleted {$messageCount} messages permanently for both users."
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Error deleting all messages: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete messages. Please try again.'
+            ], 500);
+        }
+    })->middleware(['auth']);
+
+    // REFRESH CHAT WITH PAGINATION
+    Route::get('/messages/{friend}/refresh', function (User $friend) {
+        $messages = ChatMessage::query()
+            ->where(function ($query) use ($friend) {
+                $query->where('sender_id', auth()->id())
+                    ->where('receiver_id', $friend->id);
+            })
+            ->orWhere(function ($query) use ($friend) {
+                $query->where('receiver_id', auth()->id())
+                    ->where('sender_id', $friend->id);
+            })
+            // Exclude messages that the current user has deleted
+            ->where(function ($query) {
+                $query->whereNull('deleted_for_user_id')
+                    ->orWhere('deleted_for_user_id', '!=', auth()->id());
+            })
+            ->with(['sender', 'receiver', 'repliedTo'])
+            ->orderBy('created_at', 'asc')
+            ->get();
+
+        // Also get user's current online status
+        $friend->refresh(); // Refresh the model to get latest data
+
+        return response()->json([
+            'messages' => $messages,
+            'user' => [
+                'id' => $friend->id,
+                'name' => $friend->name,
+                'email' => $friend->email,
+                'is_online' => $friend->is_online,
+                'last_seen_at' => $friend->last_seen_at
+            ],
+            'last_updated' => now()->toISOString()
+        ]);
+    })->middleware(['auth']);
 
 });
 

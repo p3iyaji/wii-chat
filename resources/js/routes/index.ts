@@ -366,7 +366,7 @@ dashboardForm.head = (options?: RouteQueryOptions): RouteFormDefinition<'get'> =
 dashboard.form = dashboardForm
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 export const chat = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions): RouteDefinition<'get'> => ({
@@ -380,7 +380,7 @@ chat.definition = {
 } satisfies RouteDefinition<["get","head"]>
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 chat.url = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions) => {
@@ -412,7 +412,7 @@ chat.url = (args: { friend: number | { id: number } } | [friend: number | { id: 
 }
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 chat.get = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions): RouteDefinition<'get'> => ({
@@ -421,7 +421,7 @@ chat.get = (args: { friend: number | { id: number } } | [friend: number | { id: 
 })
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 chat.head = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions): RouteDefinition<'head'> => ({
@@ -430,7 +430,7 @@ chat.head = (args: { friend: number | { id: number } } | [friend: number | { id:
 })
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 const chatForm = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions): RouteFormDefinition<'get'> => ({
@@ -439,7 +439,7 @@ const chatForm = (args: { friend: number | { id: number } } | [friend: number | 
 })
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 chatForm.get = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions): RouteFormDefinition<'get'> => ({
@@ -448,7 +448,7 @@ chatForm.get = (args: { friend: number | { id: number } } | [friend: number | { 
 })
 
 /**
-* @see routes/web.php:60
+* @see routes/web.php:143
 * @route '/chat/{friend}'
 */
 chatForm.head = (args: { friend: number | { id: number } } | [friend: number | { id: number } ] | number | { id: number }, options?: RouteQueryOptions): RouteFormDefinition<'get'> => ({

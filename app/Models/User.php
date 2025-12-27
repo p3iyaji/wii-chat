@@ -2,35 +2,24 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Cache;
 use Laravel\Fortify\TwoFactorAuthenticatable;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable, TwoFactorAuthenticatable;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
     protected $fillable = [
         'name',
         'email',
         'password',
         'last_seen_at',
-        'is_online',
+        'role',
     ];
 
-    /**
-     * The attributes that should be hidden for serialization.
-     *
-     * @var list<string>
-     */
     protected $hidden = [
         'password',
         'two_factor_secret',
@@ -38,11 +27,6 @@ class User extends Authenticatable
         'remember_token',
     ];
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
@@ -54,29 +38,91 @@ class User extends Authenticatable
         ];
     }
 
-    public function getIsOnlineNowAttribute()
-    {
-        if (!$this->last_seen_at) {
-            return false;
-        }
-
-        // Consider online if last activity was within 3 minutes
-        return $this->last_seen_at->greaterThan(now()->subMinutes(3));
-    }
-
-    // Update last seen timestamp
+    // Update last seen timestamp and set as online
     public function updateLastSeen()
     {
         $this->last_seen_at = now();
-        $this->is_online = true;
         $this->save();
+
+        // Set cache for online status (3 minutes)
+        Cache::put('user-online-' . $this->id, true, now()->addMinutes(3));
+
+        // Broadcast online status update
+        broadcast(new \App\Events\UserOnlineStatusUpdated($this, true));
+
+        \Log::info("User {$this->id} updated last seen at: " . now());
     }
 
     // Mark as offline
     public function markAsOffline()
     {
-        $this->is_online = false;
-        $this->save();
+        // Remove from cache
+        Cache::forget('user-online-' . $this->id);
+
+        // Broadcast offline status
+        broadcast(new \App\Events\UserOnlineStatusUpdated($this, false));
+
+        \Log::info("User {$this->id} marked as offline");
     }
+
+    // Check if user is online (from cache)
+    public function getIsOnlineAttribute()
+    {
+        return Cache::has('user-online-' . $this->id);
+    }
+
+    // Get current online status (computed)
+    public function getIsOnlineNowAttribute()
+    {
+        // Check cache first (real-time)
+        if (Cache::has('user-online-' . $this->id)) {
+            return true;
+        }
+
+        // Fallback: check if last seen within 3 minutes
+        if ($this->last_seen_at) {
+            return $this->last_seen_at->greaterThan(now()->subMinutes(3));
+        }
+
+        return false;
+    }
+
+    // Get all messages sent by this user
+    public function sentMessages()
+    {
+        return $this->hasMany(ChatMessage::class, 'sender_id');
+    }
+
+    // Get all messages received by this user
+    public function receivedMessages()
+    {
+        return $this->hasMany(ChatMessage::class, 'receiver_id');
+    }
+
+    public static function boot()
+    {
+        parent::boot();
+
+        // Clean up cache when user is deleted
+        static::deleting(function ($user) {
+            Cache::forget('user-online-' . $user->id);
+        });
+    }
+
+    // Add a method to check all online users
+    public static function getOnlineUsers()
+    {
+        $onlineUsers = [];
+        $allUsers = self::all();
+
+        foreach ($allUsers as $user) {
+            if ($user->is_online_now) {
+                $onlineUsers[] = $user;
+            }
+        }
+
+        return $onlineUsers;
+    }
+
 
 }
