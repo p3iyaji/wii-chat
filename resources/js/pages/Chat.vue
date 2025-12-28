@@ -390,9 +390,11 @@ const testTyping = () => {
 
 // Enhanced refresh method
 const refreshChat = async (showNotification = true) => {
+    // Move container variable declaration here - outside the try block
+    const container = messagesContainer.value;
+
     try {
         // Add visual feedback
-        const container = messagesContainer.value;
         if (container) {
             container.style.opacity = '0.8';
             container.style.transition = 'opacity 0.3s';
@@ -425,7 +427,7 @@ const refreshChat = async (showNotification = true) => {
         console.error('Error refreshing chat:', error);
         addDebug('❌ Error refreshing chat');
     } finally {
-        // Restore opacity
+        // Restore opacity - now container is accessible here
         if (container) {
             container.style.opacity = '1';
         }
