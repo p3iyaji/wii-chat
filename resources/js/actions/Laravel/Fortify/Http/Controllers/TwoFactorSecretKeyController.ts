@@ -1,6 +1,7 @@
 import { queryParams, type RouteQueryOptions, type RouteDefinition, type RouteFormDefinition } from './../../../../../wayfinder'
-import { queryParams, type RouteQueryOptions, type RouteDefinition, type RouteFormDefinition } from './../../../../../wayfinder'
-s/TwoFactorSecretKeyController.php:17
+/**
+* @see \Laravel\Fortify\Http\Controllers\TwoFactorSecretKeyController::show
+* @see vendor/laravel/fortify/src/Http/Controllers/TwoFactorSecretKeyController.php:17
 * @route '/user/two-factor-secret-key'
 */
 export const show = (options?: RouteQueryOptions): RouteDefinition<'get'> => ({
